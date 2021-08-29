@@ -15,4 +15,4 @@ subsets:
   - addresses:
       - ip: ${K8S_MASTER_IP} # 需要替换成K8S集群Master节点的IP
     ports:
-      - port: 444
+      - port: 443
