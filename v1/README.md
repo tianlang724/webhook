@@ -21,7 +21,7 @@ Admission Webhook有哪些使用场景？如下
 
 上面提到K8S的**动态准入控制**是通过Webhook来实现的，那么它到底是在哪个环节执行的？请看下图
 
-![k8s api request lifecycle](k8s-api-request-lifecycle.png)
+![k8s api request lifecycle](assets/README/k8s-api-request-lifecycle.png)
 
 Webhook可以理解成Java Web开发中的Filter，每个请求都会经过Filter处理，从图中可以看到，先执行的是Mutating Webhook，它可以对资源进行修改，然后执行的是Validating Webhook，它可以拒绝或者接受请求，但是它不能修改请求
 

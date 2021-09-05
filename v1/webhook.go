@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/golang/glog"
 	"k8s.io/api/admission/v1beta1"
@@ -15,7 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
-	"k8s.io/kubernetes/pkg/apis/core/v1"
+	v1 "k8s.io/kubernetes/pkg/apis/core/v1"
 )
 
 var (
@@ -184,7 +186,7 @@ func createPatch(availableAnnotations map[string]string, annotations map[string]
 }
 
 // validate deployments and services
-func (whsvr *WebhookServer) validate(ar *v1beta1.AdmissionReview) *v1beta1.AdmissionResponse {
+func (whsvr *WebhookServer) validate(ar *v1beta1.AdmissionReview, log *bytes.Buffer) *v1beta1.AdmissionResponse {
 	req := ar.Request
 	var (
 		availableLabels                 map[string]string
@@ -192,14 +194,14 @@ func (whsvr *WebhookServer) validate(ar *v1beta1.AdmissionReview) *v1beta1.Admis
 		resourceNamespace, resourceName string
 	)
 
-	glog.Infof("AdmissionReview for Kind=%v, Namespace=%v Name=%v (%v) UID=%v patchOperation=%v UserInfo=%v",
-		req.Kind, req.Namespace, req.Name, resourceName, req.UID, req.Operation, req.UserInfo)
+	log.WriteString(fmt.Sprintf("\n======begin Admission for Namespace=[%v], Kind=[%v], Name=[%v]======", req.Namespace, req.Kind.Kind, req.Name))
 
 	switch req.Kind.Kind {
 	case "Deployment":
 		var deployment appsv1.Deployment
 		if err := json.Unmarshal(req.Object.Raw, &deployment); err != nil {
-			glog.Errorf("Could not unmarshal raw object: %v", err)
+			log.WriteString(fmt.Sprintf("\nCould not unmarshal raw object: %v", err))
+			glog.Errorf(log.String())
 			return &v1beta1.AdmissionResponse{
 				Result: &metav1.Status{
 					Message: err.Error(),
@@ -211,7 +213,8 @@ func (whsvr *WebhookServer) validate(ar *v1beta1.AdmissionReview) *v1beta1.Admis
 	case "Service":
 		var service corev1.Service
 		if err := json.Unmarshal(req.Object.Raw, &service); err != nil {
-			glog.Errorf("Could not unmarshal raw object: %v", err)
+			log.WriteString(fmt.Sprintf("\nCould not unmarshal raw object: %v", err))
+			glog.Errorf(log.String())
 			return &v1beta1.AdmissionResponse{
 				Result: &metav1.Status{
 					Message: err.Error(),
@@ -220,10 +223,19 @@ func (whsvr *WebhookServer) validate(ar *v1beta1.AdmissionReview) *v1beta1.Admis
 		}
 		resourceName, resourceNamespace, objectMeta = service.Name, service.Namespace, &service.ObjectMeta
 		availableLabels = service.Labels
+	//其他不支持的类型
+	default:
+		msg := fmt.Sprintf("\nNot support for this Kind of resource  %v", req.Kind.Kind)
+		log.WriteString(msg)
+		return &v1beta1.AdmissionResponse{
+			Result: &metav1.Status{
+				Message: msg,
+			},
+		}
 	}
 
 	if !validationRequired(ignoredNamespaces, objectMeta) {
-		glog.Infof("Skipping validation for %s/%s due to policy check", resourceNamespace, resourceName)
+		log.WriteString(fmt.Sprintf("Skipping validation for %s/%s due to policy check", resourceNamespace, resourceName))
 		return &v1beta1.AdmissionResponse{
 			Allowed: true,
 		}
@@ -231,8 +243,8 @@ func (whsvr *WebhookServer) validate(ar *v1beta1.AdmissionReview) *v1beta1.Admis
 
 	allowed := true
 	var result *metav1.Status
-	glog.Info("available labels:", availableLabels)
-	glog.Info("required labels", requiredLabels)
+	log.WriteString(fmt.Sprintf("available labels: %s ", availableLabels))
+	log.WriteString(fmt.Sprintf("required labels: %s", requiredLabels))
 	for _, rl := range requiredLabels {
 		if _, ok := availableLabels[rl]; !ok {
 			allowed = false
@@ -250,7 +262,7 @@ func (whsvr *WebhookServer) validate(ar *v1beta1.AdmissionReview) *v1beta1.Admis
 }
 
 // main mutation process
-func (whsvr *WebhookServer) mutate(ar *v1beta1.AdmissionReview) *v1beta1.AdmissionResponse {
+func (whsvr *WebhookServer) mutate(ar *v1beta1.AdmissionReview, log *bytes.Buffer) *v1beta1.AdmissionResponse {
 	req := ar.Request
 	var (
 		availableLabels, availableAnnotations map[string]string
@@ -258,14 +270,15 @@ func (whsvr *WebhookServer) mutate(ar *v1beta1.AdmissionReview) *v1beta1.Admissi
 		resourceNamespace, resourceName       string
 	)
 
-	glog.Infof("AdmissionReview for Kind=%v, Namespace=%v Name=%v (%v) UID=%v patchOperation=%v UserInfo=%v",
-		req.Kind, req.Namespace, req.Name, resourceName, req.UID, req.Operation, req.UserInfo)
+	log.WriteString(fmt.Sprintf("\n======begin Admission for Namespace=[%v], Kind=[%v], Name=[%v]======", req.Namespace, req.Kind.Kind, req.Name))
+	log.WriteString("\n>>>>>>" + req.Kind.Kind)
 
 	switch req.Kind.Kind {
 	case "Deployment":
 		var deployment appsv1.Deployment
 		if err := json.Unmarshal(req.Object.Raw, &deployment); err != nil {
-			glog.Errorf("Could not unmarshal raw object: %v", err)
+			log.WriteString(fmt.Sprintf("\nCould not unmarshal raw object: %v", err))
+			glog.Errorf(log.String())
 			return &v1beta1.AdmissionResponse{
 				Result: &metav1.Status{
 					Message: err.Error(),
@@ -277,7 +290,8 @@ func (whsvr *WebhookServer) mutate(ar *v1beta1.AdmissionReview) *v1beta1.Admissi
 	case "Service":
 		var service corev1.Service
 		if err := json.Unmarshal(req.Object.Raw, &service); err != nil {
-			glog.Errorf("Could not unmarshal raw object: %v", err)
+			log.WriteString(fmt.Sprintf("\nCould not unmarshal raw object: %v", err))
+			glog.Errorf(log.String())
 			return &v1beta1.AdmissionResponse{
 				Result: &metav1.Status{
 					Message: err.Error(),
@@ -286,10 +300,19 @@ func (whsvr *WebhookServer) mutate(ar *v1beta1.AdmissionReview) *v1beta1.Admissi
 		}
 		resourceName, resourceNamespace, objectMeta = service.Name, service.Namespace, &service.ObjectMeta
 		availableLabels = service.Labels
+	//其他不支持的类型
+	default:
+		msg := fmt.Sprintf("\nNot support for this Kind of resource  %v", req.Kind.Kind)
+		log.WriteString(msg)
+		return &v1beta1.AdmissionResponse{
+			Result: &metav1.Status{
+				Message: msg,
+			},
+		}
 	}
 
 	if !mutationRequired(ignoredNamespaces, objectMeta) {
-		glog.Infof("Skipping validation for %s/%s due to policy check", resourceNamespace, resourceName)
+		log.WriteString(fmt.Sprintf("Skipping validation for %s/%s due to policy check", resourceNamespace, resourceName))
 		return &v1beta1.AdmissionResponse{
 			Allowed: true,
 		}
@@ -305,7 +328,7 @@ func (whsvr *WebhookServer) mutate(ar *v1beta1.AdmissionReview) *v1beta1.Admissi
 		}
 	}
 
-	glog.Infof("AdmissionResponse: patch=%v\n", string(patchBytes))
+	log.WriteString(fmt.Sprintf("AdmissionResponse: patch=%v\n", string(patchBytes)))
 	return &v1beta1.AdmissionResponse{
 		Allowed: true,
 		Patch:   patchBytes,
@@ -318,6 +341,10 @@ func (whsvr *WebhookServer) mutate(ar *v1beta1.AdmissionReview) *v1beta1.Admissi
 
 // Serve method for webhook server
 func (whsvr *WebhookServer) serve(w http.ResponseWriter, r *http.Request) {
+	//记录日志
+	var log bytes.Buffer
+
+	//读取从ApiServer过来的数据放到body
 	var body []byte
 	if r.Body != nil {
 		if data, err := ioutil.ReadAll(r.Body); err == nil {
@@ -325,34 +352,42 @@ func (whsvr *WebhookServer) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(body) == 0 {
-		glog.Error("empty body")
-		http.Error(w, "empty body", http.StatusBadRequest)
+		log.WriteString("empty body")
+		glog.Info(log.String())
+		//返回状态码400
+		//如果在Apiserver调用此Webhook返回是400，说明APIServer自己传过来的数据是空
+		http.Error(w, log.String(), http.StatusBadRequest)
 		return
 	}
 
 	// verify the content type is accurate
 	contentType := r.Header.Get("Content-Type")
 	if contentType != "application/json" {
-		glog.Errorf("Content-Type=%s, expect application/json", contentType)
-		http.Error(w, "invalid Content-Type, expect `application/json`", http.StatusUnsupportedMediaType)
+		log.WriteString(fmt.Sprintf("Content-Type=%s, expect `application/json`", contentType))
+		glog.Errorf(log.String())
+		//如果在Apiserver调用此Webhook返回是415，说明APIServer自己传过来的数据不是json格式，处理不了
+		http.Error(w, log.String(), http.StatusUnsupportedMediaType)
 		return
 	}
 
 	var admissionResponse *v1beta1.AdmissionResponse
 	ar := v1beta1.AdmissionReview{}
 	if _, _, err := deserializer.Decode(body, nil, &ar); err != nil {
-		glog.Errorf("Can't decode body: %v", err)
+		//组装错误信息
+		log.WriteString(fmt.Sprintf("\nCan't decode body,error info is :  %s", err.Error()))
+		glog.Errorln(log.String())
+		//返回错误信息，形式表现为资源创建会失败，
 		admissionResponse = &v1beta1.AdmissionResponse{
 			Result: &metav1.Status{
-				Message: err.Error(),
+				Message: log.String(),
 			},
 		}
 	} else {
 		fmt.Println(r.URL.Path)
 		if r.URL.Path == "/mutate" {
-			admissionResponse = whsvr.mutate(&ar)
+			admissionResponse = whsvr.mutate(&ar, &log)
 		} else if r.URL.Path == "/validate" {
-			admissionResponse = whsvr.validate(&ar)
+			admissionResponse = whsvr.validate(&ar, &log)
 		}
 	}
 
@@ -366,12 +401,18 @@ func (whsvr *WebhookServer) serve(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := json.Marshal(admissionReview)
 	if err != nil {
-		glog.Errorf("Can't encode response: %v", err)
-		http.Error(w, fmt.Sprintf("could not encode response: %v", err), http.StatusInternalServerError)
+		log.WriteString(fmt.Sprintf("\nCan't encode response: %v", err))
+		http.Error(w, log.String(), http.StatusInternalServerError)
 	}
 	glog.Infof("Ready to write reponse ...")
 	if _, err := w.Write(resp); err != nil {
-		glog.Errorf("Can't write response: %v", err)
-		http.Error(w, fmt.Sprintf("could not write response: %v", err), http.StatusInternalServerError)
+		log.WriteString(fmt.Sprintf("\nCan't write response: %v", err))
+		http.Error(w, log.String(), http.StatusInternalServerError)
 	}
+
+	log.WriteString("\n======ended Admission already writed to reponse======")
+	//东八区时间
+	datetime := time.Now().In(time.FixedZone("GMT", 8*3600)).Format("2006-01-02 15:04:05")
+	//最后打印日志
+	glog.Infof(datetime + " " + log.String())
 }
