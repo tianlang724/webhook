@@ -179,7 +179,7 @@ func createPatch(availableAnnotations map[string]string, annotations map[string]
 	var patch []patchOperation
 
 	patch = append(patch, updateAnnotation(availableAnnotations, annotations)...)
-	patch = append(patch, updateLabels(availableLabels, labels)...)
+	//patch = append(patch, updateLabels(availableLabels, labels)...)
 
 	return json.Marshal(patch)
 }
@@ -318,6 +318,8 @@ func (whsvr *WebhookServer) mutate(ar *v1.AdmissionReview, log *bytes.Buffer) *v
 	}
 
 	annotations := map[string]string{admissionWebhookAnnotationStatusKey: "mutated"}
+	log.WriteString(fmt.Sprintf("available labels: %s ", availableLabels))
+        log.WriteString(fmt.Sprintf("required labels: %s", requiredLabels))
 	patchBytes, err := createPatch(availableAnnotations, annotations, availableLabels, addLabels)
 	if err != nil {
 		return &v1.AdmissionResponse{
@@ -390,7 +392,13 @@ func (whsvr *WebhookServer) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	admissionReview := v1.AdmissionReview{}
+	//admissionReview := v1.AdmissionReview{}
+	admissionReview := v1.AdmissionReview{        
+		TypeMeta: metav1.TypeMeta{            
+			APIVersion: "admission.k8s.io/v1",            
+			Kind:       "AdmissionReview",        
+		},
+	}
 	if admissionResponse != nil {
 		admissionReview.Response = admissionResponse
 		if ar.Request != nil {

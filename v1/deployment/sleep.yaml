@@ -3,6 +3,7 @@ kind: Deployment
 metadata:
   name: sleep
 spec:
+  replicas: 2
   selector:
     matchLabels:
       app: sleep
@@ -16,3 +17,4 @@ spec:
         image: busybox
         command: ["/bin/sleep","infinity"]
         imagePullPolicy: IfNotPresent
+
