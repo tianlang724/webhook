@@ -17,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 var (
@@ -175,14 +176,39 @@ func updateLabels(target map[string]string, added map[string]string) (patch []pa
 	return patch
 }
 
-func createPatch(availableAnnotations map[string]string, annotations map[string]string, availableLabels map[string]string, labels map[string]string) ([]byte, error) {
+// applyResourceReduction applies a 90% reduction to the resource requests of all containers.
+func applyResourceReduction(containers []corev1.Container) (patch []patchOperation) {
+	for i, container := range containers {
+		for resourceName, quantity := range container.Resources.Requests {
+			// Calculate 90% of the original value
+			originalValue := quantity.DeepCopy()
+			ninetyPercentValue := originalValue.MilliValue() * 90 / 100
+			// Create a new Quantity with 90% of the original value
+			ninetyPercentQuantity := resource.NewMilliQuantity(ninetyPercentValue, originalValue.Format)
+			// Create a patch operation
+			patch = append(patch, patchOperation{
+				Op:    "replace",
+				Path:  fmt.Sprintf("/spec/template/spec/containers/%d/resources/requests/%s", i, strings.ToLower(string(resourceName))),
+				Value: ninetyPercentQuantity.String(),
+			})
+		}
+	}
+	return patch
+}
+
+func createPatch(availableAnnotations map[string]string, annotations map[string]string, containers []corev1.Container) ([]byte, error) {
 	var patch []patchOperation
 
 	patch = append(patch, updateAnnotation(availableAnnotations, annotations)...)
+	
+	//skip lables
 	//patch = append(patch, updateLabels(availableLabels, labels)...)
+
+	patch = append(patch, applyResourceReduction(containers)...);
 
 	return json.Marshal(patch)
 }
+
 
 // validate deployments and services
 func (whsvr *WebhookServer) validate(ar *v1.AdmissionReview, log *bytes.Buffer) *v1.AdmissionResponse {
@@ -264,9 +290,11 @@ func (whsvr *WebhookServer) validate(ar *v1.AdmissionReview, log *bytes.Buffer) 
 func (whsvr *WebhookServer) mutate(ar *v1.AdmissionReview, log *bytes.Buffer) *v1.AdmissionResponse {
 	req := ar.Request
 	var (
-		availableLabels, availableAnnotations map[string]string
-		objectMeta                            *metav1.ObjectMeta
-		resourceNamespace, resourceName       string
+		//availableLabels, 
+		availableAnnotations map[string]string
+		//objectMeta                            *metav1.ObjectMeta
+		//resourceNamespace, resourceName       string
+		containers			      []corev1.Container
 	)
 
 	log.WriteString(fmt.Sprintf("\n======begin Admission for Namespace=[%v], Kind=[%v], Name=[%v]======", req.Namespace, req.Kind.Kind, req.Name))
@@ -284,8 +312,9 @@ func (whsvr *WebhookServer) mutate(ar *v1.AdmissionReview, log *bytes.Buffer) *v
 				},
 			}
 		}
-		resourceName, resourceNamespace, objectMeta = deployment.Name, deployment.Namespace, &deployment.ObjectMeta
-		availableLabels = deployment.Labels
+		//resourceName, resourceNamespace, objectMeta = deployment.Name, deployment.Namespace, &deployment.ObjectMeta
+		containers = deployment.Spec.Template.Spec.Containers
+		//availableLabels = deployment.Labels
 	case "Service":
 		var service corev1.Service
 		if err := json.Unmarshal(req.Object.Raw, &service); err != nil {
@@ -297,8 +326,8 @@ func (whsvr *WebhookServer) mutate(ar *v1.AdmissionReview, log *bytes.Buffer) *v
 				},
 			}
 		}
-		resourceName, resourceNamespace, objectMeta = service.Name, service.Namespace, &service.ObjectMeta
-		availableLabels = service.Labels
+		//resourceName, resourceNamespace, objectMeta = service.Name, service.Namespace, &service.ObjectMeta
+		//availableLabels = service.Labels
 	//其他不支持的类型
 	default:
 		msg := fmt.Sprintf("\nNot support for this Kind of resource  %v", req.Kind.Kind)
@@ -310,17 +339,16 @@ func (whsvr *WebhookServer) mutate(ar *v1.AdmissionReview, log *bytes.Buffer) *v
 		}
 	}
 
-	if !mutationRequired(ignoredNamespaces, objectMeta) {
-		log.WriteString(fmt.Sprintf("Skipping validation for %s/%s due to policy check", resourceNamespace, resourceName))
-		return &v1.AdmissionResponse{
-			Allowed: true,
-		}
-	}
+	// skip check.
+	// if !mutationRequired(ignoredNamespaces, objectMeta) {
+	// 	log.WriteString(fmt.Sprintf("Skipping validation for %s/%s due to policy check", resourceNamespace, resourceName))
+	// 	return &v1.AdmissionResponse{
+	// 		Allowed: true,
+	// 	}
+	// }
 
 	annotations := map[string]string{admissionWebhookAnnotationStatusKey: "mutated"}
-	log.WriteString(fmt.Sprintf("available labels: %s ", availableLabels))
-        log.WriteString(fmt.Sprintf("required labels: %s", requiredLabels))
-	patchBytes, err := createPatch(availableAnnotations, annotations, availableLabels, addLabels)
+	patchBytes, err := createPatch(availableAnnotations, annotations, containers)
 	if err != nil {
 		return &v1.AdmissionResponse{
 			Result: &metav1.Status{
@@ -423,3 +451,4 @@ func (whsvr *WebhookServer) serve(w http.ResponseWriter, r *http.Request) {
 	//最后打印日志
 	glog.Infof(datetime + " " + log.String())
 }
+

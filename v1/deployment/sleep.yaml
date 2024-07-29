@@ -17,4 +17,11 @@ spec:
         image: busybox
         command: ["/bin/sleep","infinity"]
         imagePullPolicy: IfNotPresent
+        resources:
+          requests:
+            memory: "10Mi"
+            cpu: "10m"
+          limits:
+            memory: "20Mi"
+            cpu: "20m"
 
