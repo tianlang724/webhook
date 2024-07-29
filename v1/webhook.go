@@ -177,7 +177,13 @@ func updateLabels(target map[string]string, added map[string]string) (patch []pa
 }
 
 // applyResourceReduction applies a 90% reduction to the resource requests of all containers.
-func applyResourceReduction(containers []corev1.Container) (patch []patchOperation) {
+func applyResourceReduction(containers []corev1.Container, resourceType string) (patch []patchOperation) {
+	var patchPath string;
+	if (resourceType == "Pod"){
+		patchPath = "/spec/containers/%d/resources/requests/%s";
+	}else{
+		patchPath = "/spec/template/spec/containers/%d/resources/requests/%s";
+	}
 	for i, container := range containers {
 		for resourceName, quantity := range container.Resources.Requests {
 			// Calculate 90% of the original value
@@ -188,7 +194,7 @@ func applyResourceReduction(containers []corev1.Container) (patch []patchOperati
 			// Create a patch operation
 			patch = append(patch, patchOperation{
 				Op:    "replace",
-				Path:  fmt.Sprintf("/spec/template/spec/containers/%d/resources/requests/%s", i, strings.ToLower(string(resourceName))),
+				Path:  fmt.Sprintf(patchPath, i, strings.ToLower(string(resourceName))),
 				Value: ninetyPercentQuantity.String(),
 			})
 		}
@@ -196,7 +202,7 @@ func applyResourceReduction(containers []corev1.Container) (patch []patchOperati
 	return patch
 }
 
-func createPatch(availableAnnotations map[string]string, annotations map[string]string, containers []corev1.Container) ([]byte, error) {
+func createPatch(availableAnnotations map[string]string, annotations map[string]string, containers []corev1.Container, resourceType string) ([]byte, error) {
 	var patch []patchOperation
 
 	patch = append(patch, updateAnnotation(availableAnnotations, annotations)...)
@@ -204,7 +210,7 @@ func createPatch(availableAnnotations map[string]string, annotations map[string]
 	//skip lables
 	//patch = append(patch, updateLabels(availableLabels, labels)...)
 
-	patch = append(patch, applyResourceReduction(containers)...);
+	patch = append(patch, applyResourceReduction(containers,resourceType)...);
 
 	return json.Marshal(patch)
 }
@@ -315,9 +321,9 @@ func (whsvr *WebhookServer) mutate(ar *v1.AdmissionReview, log *bytes.Buffer) *v
 		//resourceName, resourceNamespace, objectMeta = deployment.Name, deployment.Namespace, &deployment.ObjectMeta
 		containers = deployment.Spec.Template.Spec.Containers
 		//availableLabels = deployment.Labels
-	case "Service":
-		var service corev1.Service
-		if err := json.Unmarshal(req.Object.Raw, &service); err != nil {
+	case "Pod":
+		var pod corev1.Pod
+		if err := json.Unmarshal(req.Object.Raw, &pod); err != nil {
 			log.WriteString(fmt.Sprintf("\nCould not unmarshal raw object: %v", err))
 			glog.Errorf(log.String())
 			return &v1.AdmissionResponse{
@@ -326,6 +332,7 @@ func (whsvr *WebhookServer) mutate(ar *v1.AdmissionReview, log *bytes.Buffer) *v
 				},
 			}
 		}
+		containers = pod.Spec.Containers
 		//resourceName, resourceNamespace, objectMeta = service.Name, service.Namespace, &service.ObjectMeta
 		//availableLabels = service.Labels
 	//其他不支持的类型
@@ -348,7 +355,7 @@ func (whsvr *WebhookServer) mutate(ar *v1.AdmissionReview, log *bytes.Buffer) *v
 	// }
 
 	annotations := map[string]string{admissionWebhookAnnotationStatusKey: "mutated"}
-	patchBytes, err := createPatch(availableAnnotations, annotations, containers)
+	patchBytes, err := createPatch(availableAnnotations, annotations, containers, req.Kind.Kind)
 	if err != nil {
 		return &v1.AdmissionResponse{
 			Result: &metav1.Status{
